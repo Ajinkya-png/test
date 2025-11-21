@@ -1,0 +1,211 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    project: food-delivery-voice-ai
+    component: monitoring
+---
+# =======================
+# PROMETHEUS DEPLOYMENT
+# =======================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.52.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=15d"
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: prometheus-config
+              mountPath: /etc/prometheus/
+            - name: prometheus-data
+              mountPath: /prometheus
+      volumes:
+        - name: prometheus-config
+          configMap:
+            name: prometheus-config
+        - name: prometheus-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9090
+      targetPort: 9090
+  selector:
+    app: prometheus
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+    scrape_configs:
+      - job_name: 'fastapi-app'
+        metrics_path: /api/v1/monitoring/metrics
+        static_configs:
+          - targets: ['app-service.default.svc.cluster.local:8000']
+      - job_name: 'redis'
+        static_configs:
+          - targets: ['redis.default.svc.cluster.local:9121']
+      - job_name: 'postgresql'
+        static_configs:
+          - targets: ['postgres-exporter.default.svc.cluster.local:9187']
+---
+# =======================
+# GRAFANA DEPLOYMENT
+# =======================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.2.0
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secrets
+                  key: admin-user
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secrets
+                  key: admin-password
+            - name: GF_SERVER_ROOT_URL
+              value: "%(protocol)s://%(domain)s:%(http_port)s/"
+            - name: GF_SECURITY_ALLOW_EMBEDDING
+              value: "true"
+          volumeMounts:
+            - name: grafana-storage
+              mountPath: /var/lib/grafana
+      volumes:
+        - name: grafana-storage
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3000
+      targetPort: 3000
+  selector:
+    app: grafana
+---
+# =======================
+# GRAFANA SECRET
+# =======================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-secrets
+  namespace: monitoring
+type: Opaque
+stringData:
+  admin-user: "admin"
+  admin-password: "admin123"
+---
+# =======================
+# GRAFANA DASHBOARD CONFIGMAP
+# =======================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  food-delivery-overview.json: |
+    {
+      "title": "Food Delivery AI System Overview",
+      "timezone": "browser",
+      "panels": [
+        {
+          "type": "graph",
+          "title": "API Request Rate",
+          "targets": [
+            {
+              "expr": "rate(http_requests_total[1m])",
+              "legendFormat": "Requests per second"
+            }
+          ]
+        },
+        {
+          "type": "gauge",
+          "title": "Call Success Rate",
+          "targets": [
+            {
+              "expr": "(successful_calls_total / total_calls_total) * 100"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "percent" } }
+        },
+        {
+          "type": "graph",
+          "title": "STT / TTS Latency (ms)",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(stt_latency_seconds_bucket[5m])) by (le))"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(tts_latency_seconds_bucket[5m])) by (le))"
+            }
+          ]
+        }
+      ]
+    }

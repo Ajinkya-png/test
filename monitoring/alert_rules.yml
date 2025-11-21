@@ -1,0 +1,12 @@
+# Prometheus alert rules (example)
+groups:
+  - name: food_delivery_alerts
+    rules:
+      - alert: HighFailedCallRate
+        expr: increase(food_delivery_calls_total[5m]) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High number of calls in 5m"
+          description: "The call volume is unusually high."

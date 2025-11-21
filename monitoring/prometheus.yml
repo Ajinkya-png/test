@@ -1,0 +1,9 @@
+# Minimal prometheus.yml example for local development
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'food_delivery_app'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['web:8000']
